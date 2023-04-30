@@ -1,0 +1,95 @@
+---
+- name: Deploy Symfony API
+  hosts: webservers
+  become: yes
+  vars:
+    project_root: /var/www/html/test2
+    repository_url: https://github.com/EpitechMscProPromo2025/T-WEB-600-LIL-6-1-ecommerce-martin.flament.git
+    server_name: localhost:2222
+
+  tasks:
+    - name: Update package cache and upgrade packages
+      apt:
+        update_cache: yes
+        upgrade: safe
+
+    - name: Install required packages
+      apt:
+        name:
+          - git
+          - php
+          - php-cli
+          - php-curl
+          - php-mbstring
+          - php-xml
+          - php-zip
+          - php-mysql
+          - mariadb-server
+          - nginx
+        state: present
+
+    - name: Enable and start MariaDB service
+      systemd:
+        name: mariadb
+        state: started
+        enabled: yes
+
+    - name: Set permissions for project root
+      file:
+        path: "{{ project_root }}"
+        owner: mlavalle
+        group: mlavalle
+        mode: '0755'
+
+    - name: Clone Symfony API repository
+      git:
+        repo: "{{ repository_url }}"
+        dest: "{{ project_root }}"
+        version: main
+        force: yes
+
+    - name: Install Composer
+      command: >
+        php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
+        && php composer-setup.php --install-dir=/usr/local/bin --filename=composer
+      args:
+        chdir: "{{ project_root }}"
+
+    - name: Install Symfony API dependencies
+      command: composer install --no-dev --optimize-autoloader
+      args:
+        chdir: "{{ project_root }}"
+
+    - name: Configure Nginx
+      blockinfile:
+        path: /etc/nginx/sites-available/default
+        create: yes
+        block: |
+          server {
+              listen 80 default_server;
+              listen [::]:80 default_server;
+              server_name {{ server_name }};
+              root {{ project_root }}/public;
+              index index.php;
+              location / {
+                  try_files $uri /index.php$is_args$args;
+              }
+              location ~ ^/index\.php(/|$) {
+                  fastcgi_pass unix:/run/php/php7.4-fpm.sock;
+                  fastcgi_split_path_info ^(.+\.php)(/.*)$;
+                  include fastcgi_params;
+                  fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
+                  fastcgi_param DOCUMENT_ROOT $realpath_root;
+                  internal;
+              }
+              location ~ \.php$ {
+                  return 404;
+              }
+          }
+      notify: Reload nginx
+
+  handlers:
+    - name: Reload nginx
+      systemd:
+        name: nginx
+        state: reloaded
